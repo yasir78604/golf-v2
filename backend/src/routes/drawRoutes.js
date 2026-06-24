@@ -4,11 +4,11 @@ const authMiddleware = require('../middleware/auth');
 const adminMiddleware = require('../middleware/admin');
 const drawController = require('../controllers/drawController');
 
-// Public routes (users can view draws – no auth required for current/past)
+// Public routes
 router.get('/current', drawController.getCurrentDraw);
 router.get('/past', drawController.getPastDraws);
 
-// Admin routes – require auth + admin
+// Admin routes
 router.use(authMiddleware);
 router.use(adminMiddleware);
 router.get('/all', drawController.getAllDraws);

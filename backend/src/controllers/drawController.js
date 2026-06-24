@@ -4,9 +4,6 @@ const { supabaseAdmin } = require('../config/supabase');
 exports.getCurrentDraw = async (req, res) => {
   try {
     const currentMonth = new Date().toISOString().slice(0, 7);
-    console.log('📆 Fetching current draw for month:', currentMonth);
-
-    // Use limit(1) instead of maybeSingle() to handle multiple rows
     const { data, error } = await supabaseAdmin
       .from('draws')
       .select('*')
@@ -15,23 +12,17 @@ exports.getCurrentDraw = async (req, res) => {
       .limit(1);
 
     if (error) {
-      console.error('❌ Supabase error in getCurrentDraw:', error);
-      return res.status(500).json({ 
-        error: 'Database error', 
-        details: error.message 
-      });
+      console.error('getCurrentDraw error:', error);
+      return res.status(500).json({ error: error.message });
     }
-
-    // data is an array, take first element or null
-    const draw = data && data.length > 0 ? data[0] : null;
-    console.log('✅ getCurrentDraw result:', draw || 'No draw found');
-    res.json({ success: true, data: draw });
+    res.json({ success: true, data: data?.[0] || null });
   } catch (error) {
-    console.error('❌ Unexpected error in getCurrentDraw:', error);
+    console.error('getCurrentDraw error:', error);
     res.status(500).json({ error: error.message });
   }
 };
-// ---------- USER: Get past published draws ----------
+
+// ---------- USER: Get past draws ----------
 exports.getPastDraws = async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
@@ -42,33 +33,12 @@ exports.getPastDraws = async (req, res) => {
       .limit(12);
 
     if (error) {
-      console.error('❌ Supabase error in getPastDraws:', error);
+      console.error('getPastDraws error:', error);
       return res.status(500).json({ error: error.message });
     }
-
     res.json({ success: true, data: data || [] });
   } catch (error) {
-    console.error('❌ getPastDraws error:', error);
-    res.status(500).json({ error: error.message });
-  }
-};
-
-// ---------- ADMIN: Get all draws ----------
-exports.getAllDraws = async (req, res) => {
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('draws')
-      .select('*')
-      .order('month', { ascending: false });
-
-    if (error) {
-      console.error('❌ Supabase error in getAllDraws:', error);
-      return res.status(500).json({ error: error.message });
-    }
-
-    res.json({ success: true, data: data || [] });
-  } catch (error) {
-    console.error('❌ getAllDraws error:', error);
+    console.error('getPastDraws error:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -78,7 +48,6 @@ exports.simulateDraw = async (req, res) => {
   try {
     const { month, logic } = req.body;
 
-    // Get active users
     const { data: activeUsers } = await supabaseAdmin
       .from('profiles')
       .select('id')
@@ -86,7 +55,6 @@ exports.simulateDraw = async (req, res) => {
 
     const userIds = activeUsers.map(u => u.id);
 
-    // Get scores
     const { data: scores } = await supabaseAdmin
       .from('scores')
       .select('user_id, points')
@@ -95,7 +63,6 @@ exports.simulateDraw = async (req, res) => {
 
     const allPoints = scores.map(s => s.points);
 
-    // Generate numbers
     const freq = Array(46).fill(0);
     scores.forEach(s => { if (s.points >= 1 && s.points <= 45) freq[s.points]++; });
 
@@ -121,7 +88,6 @@ exports.simulateDraw = async (req, res) => {
       }
     }
 
-    // Build user scores map
     const userScoreMap = {};
     for (const row of scores) {
       if (!userScoreMap[row.user_id]) userScoreMap[row.user_id] = [];
@@ -138,7 +104,6 @@ exports.simulateDraw = async (req, res) => {
       if (matches >= 3) matchedWinners[matches].push(userId);
     }
 
-    // Calculate prize pools
     const monthlyFee = 10;
     const poolContribution = 0.70;
     const totalPool = activeUsers.length * monthlyFee * poolContribution;
@@ -148,7 +113,6 @@ exports.simulateDraw = async (req, res) => {
       tier3: totalPool * 0.25,
     };
 
-    // Store draw
     const { data: draw, error } = await supabaseAdmin
       .from('draws')
       .insert([{
@@ -163,10 +127,7 @@ exports.simulateDraw = async (req, res) => {
       .select()
       .single();
 
-    if (error) {
-      console.error('❌ Error saving draw:', error);
-      return res.status(500).json({ error: error.message });
-    }
+    if (error) throw error;
 
     res.json({
       success: true,
@@ -175,14 +136,15 @@ exports.simulateDraw = async (req, res) => {
       prizePools: pools,
     });
   } catch (error) {
-    console.error('❌ simulateDraw error:', error);
+    console.error('simulateDraw error:', error);
     res.status(500).json({ error: error.message });
   }
 };
 
-// ---------- ADMIN: Publish a draw ----------
-// ---------- ADMIN: Publish a draw ----------
+// ---------- ADMIN: Publish a draw (with winner insertion) ----------
 exports.publishDraw = async (req, res) => {
+  console.log('🔵 publishDraw called for drawId:', req.params.drawId);
+
   try {
     const { drawId } = req.params;
 
@@ -193,12 +155,16 @@ exports.publishDraw = async (req, res) => {
       .eq('id', drawId)
       .single();
 
-    if (fetchError) throw fetchError;
+    if (fetchError) {
+      console.error('❌ Error fetching draw:', fetchError);
+      return res.status(500).json({ error: fetchError.message });
+    }
+
     if (draw.status === 'published') {
       return res.status(400).json({ error: 'Draw already published' });
     }
 
-    // 2. Get all active users with their scores
+    // 2. Get all active users and their scores
     const { data: activeUsers } = await supabaseAdmin
       .from('profiles')
       .select('id, full_name')
@@ -233,15 +199,15 @@ exports.publishDraw = async (req, res) => {
       }
     }
 
-    // 5. Calculate prize amounts
+    console.log('🏆 Matched winners:', matchedWinners);
+
+    // 5. Insert winners
+    const winnersToInsert = [];
     const prizePools = {
       5: draw.prize_pool_tier_5 || 0,
       4: draw.prize_pool_tier_4 || 0,
       3: draw.prize_pool_tier_3 || 0,
     };
-
-    // 6. Insert winners into winners table
-    const winnersToInsert = [];
 
     for (const tier of [5, 4, 3]) {
       const winnerIds = matchedWinners[tier] || [];
@@ -249,7 +215,6 @@ exports.publishDraw = async (req, res) => {
 
       if (winnerIds.length > 0 && poolAmount > 0) {
         const prizePerWinner = poolAmount / winnerIds.length;
-
         for (const userId of winnerIds) {
           winnersToInsert.push({
             draw_id: drawId,
@@ -262,7 +227,7 @@ exports.publishDraw = async (req, res) => {
       }
     }
 
-    console.log(`🏆 Winners to insert: ${winnersToInsert.length}`);
+    console.log(`📦 Winners to insert: ${winnersToInsert.length}`);
 
     if (winnersToInsert.length > 0) {
       const { error: insertError } = await supabaseAdmin
@@ -270,22 +235,23 @@ exports.publishDraw = async (req, res) => {
         .insert(winnersToInsert);
 
       if (insertError) {
-        console.error('❌ Error inserting winners:', insertError);
-        // Continue anyway – don't block publishing
+        console.error('❌ Insert error:', insertError);
+        // Continue even if insert fails
       } else {
         console.log(`✅ ${winnersToInsert.length} winners inserted`);
       }
-    } else {
-      console.log('ℹ️ No winners found for this draw');
     }
 
-    // 7. Update draw status to published
-    const { error } = await supabaseAdmin
+    // 6. Update draw status
+    const { error: updateError } = await supabaseAdmin
       .from('draws')
       .update({ status: 'published' })
       .eq('id', drawId);
 
-    if (error) throw error;
+    if (updateError) {
+      console.error('❌ Update error:', updateError);
+      return res.status(500).json({ error: updateError.message });
+    }
 
     res.json({
       success: true,
@@ -299,39 +265,22 @@ exports.publishDraw = async (req, res) => {
   }
 };
 
-// ============================================
-// SEND WINNER NOTIFICATIONS
-// ============================================
-const sendWinnerNotifications = async (winners, draw, activeUsers) => {
+// ---------- ADMIN: Get all draws (for admin) ----------
+exports.getAllDraws = async (req, res) => {
   try {
-    // Group winners by user_id
-    const winnerMap = {};
-    for (const w of winners) {
-      if (!winnerMap[w.user_id]) winnerMap[w.user_id] = [];
-      winnerMap[w.user_id].push(w);
+    const { data, error } = await supabaseAdmin
+      .from('draws')
+      .select('*')
+      .order('month', { ascending: false })
+      .limit(5);
+
+    if (error) {
+      console.error('getAllDraws error:', error);
+      return res.status(500).json({ error: error.message });
     }
-
-    // Create user lookup
-    const userMap = {};
-    for (const u of activeUsers) {
-      userMap[u.id] = u;
-    }
-
-    // Send email to each winner
-    for (const [userId, wins] of Object.entries(winnerMap)) {
-      const user = userMap[userId];
-      if (!user || !user.email) continue;
-
-      const totalAmount = wins.reduce((sum, w) => sum + w.prize_amount, 0);
-      const tiers = wins.map(w => `${w.tier}-Match ($${w.prize_amount.toFixed(2)})`).join(', ');
-
-      console.log(`📧 Sending winner email to ${user.email}`);
-      console.log(`   Won: ${tiers} (Total: $${totalAmount.toFixed(2)})`);
-
-      // TODO: Integrate with SendGrid/Resend/Nodemailer
-      // For now, just log
-    }
+    res.json({ success: true, data: data || [] });
   } catch (error) {
-    console.error('Error sending winner notifications:', error);
+    console.error('getAllDraws error:', error);
+    res.status(500).json({ error: error.message });
   }
 };

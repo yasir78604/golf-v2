@@ -1,6 +1,4 @@
 const { supabaseAdmin } = require('../config/supabase');
-const { generateDrawNumbers, matchWinners } = require('../services/drawEngine');
-const { calculatePrizePool, splitPrize } = require('../services/prizeCalculator');
 
 // ============================================
 // DASHBOARD STATS
@@ -44,15 +42,11 @@ exports.getDashboardStats = async (req, res) => {
 // ============================================
 // RECENT WINNERS
 // ============================================
-// ---------- RECENT WINNERS ----------
 exports.getRecentWinners = async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('winners')
-      .select(`
-        *,
-        profile:user_id (full_name)   // ✅ REMOVED email
-      `)
+      .select(`*, profile:user_id (full_name)`)
       .order('created_at', { ascending: false })
       .limit(10);
 
@@ -64,25 +58,6 @@ exports.getRecentWinners = async (req, res) => {
   }
 };
 
-// ---------- GET ALL WINNERS ----------
-exports.getAllWinners = async (req, res) => {
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('winners')
-      .select(`
-        *,
-        profile:user_id (full_name)   // ✅ REMOVED email
-      `)
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
-    res.json({ success: true, data });
-  } catch (error) {
-    console.error('Get winners error:', error);
-    res.status(500).json({ error: error.message });
-  }
-};
-
 // ============================================
 // USER MANAGEMENT
 // ============================================
@@ -90,7 +65,7 @@ exports.getAllUsers = async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('profiles')
-      .select('*')   // This is fine because profiles doesn't have email
+      .select('*')
       .order('created_at', { ascending: false });
 
     if (error) throw error;
@@ -139,27 +114,22 @@ exports.updateUser = async (req, res) => {
 };
 
 // ============================================
-// DRAW MANAGEMENT
+// FORCE MATCH WINNERS (Manual Fallback)
 // ============================================
-exports.getAllDraws = async (req, res) => {
+exports.forceMatchWinners = async (req, res) => {
   try {
-    const { data, error } = await supabaseAdmin
+    const { drawId } = req.params;
+
+    // 1. Get the draw
+    const { data: draw, error: fetchError } = await supabaseAdmin
       .from('draws')
       .select('*')
-      .order('month', { ascending: false });
+      .eq('id', drawId)
+      .single();
 
-    if (error) throw error;
-    res.json({ success: true, data });
-  } catch (error) {
-    console.error('Get draws error:', error);
-    res.status(500).json({ error: error.message });
-  }
-};
+    if (fetchError) throw fetchError;
 
-exports.simulateDraw = async (req, res) => {
-  try {
-    const { month, logic } = req.body;
-
+    // 2. Get active users and scores
     const { data: activeUsers } = await supabaseAdmin
       .from('profiles')
       .select('id')
@@ -173,31 +143,7 @@ exports.simulateDraw = async (req, res) => {
       .in('user_id', userIds)
       .order('date', { ascending: false });
 
-    const freq = Array(46).fill(0);
-    scores.forEach(s => { if (s.points >= 1 && s.points <= 45) freq[s.points]++; });
-
-    const weights = {};
-    for (let i = 1; i <= 45; i++) {
-      if (logic === 'random') weights[i] = 1;
-      else if (logic === 'weighted_popular') weights[i] = freq[i] + 1;
-      else if (logic === 'weighted_underdog') weights[i] = 1 / (freq[i] + 0.1);
-    }
-
-    const numbers = [];
-    const tempWeights = { ...weights };
-    for (let k = 0; k < 5; k++) {
-      const total = Object.values(tempWeights).reduce((a, b) => a + b, 0);
-      let rand = Math.random() * total;
-      for (const [num, w] of Object.entries(tempWeights)) {
-        rand -= w;
-        if (rand <= 0) {
-          numbers.push(Number(num));
-          delete tempWeights[num];
-          break;
-        }
-      }
-    }
-
+    // 3. Build user score map (latest 5)
     const userScoreMap = {};
     for (const row of scores) {
       if (!userScoreMap[row.user_id]) userScoreMap[row.user_id] = [];
@@ -206,130 +152,59 @@ exports.simulateDraw = async (req, res) => {
       }
     }
 
-    const drawSet = new Set(numbers);
+    // 4. Match winners
+    const drawNumbers = draw.numbers;
+    const drawSet = new Set(drawNumbers);
     const matchedWinners = { 5: [], 4: [], 3: [] };
 
     for (const [userId, userScores] of Object.entries(userScoreMap)) {
       const matches = userScores.filter(n => drawSet.has(n)).length;
-      if (matches >= 3) matchedWinners[matches].push(userId);
+      if (matches >= 3) {
+        matchedWinners[matches].push(userId);
+      }
     }
 
-    const monthlyFee = 10;
-    const poolContribution = 0.70;
-    const totalPool = activeUsers.length * monthlyFee * poolContribution;
-    const pools = {
-      tier5: totalPool * 0.40,
-      tier4: totalPool * 0.35,
-      tier3: totalPool * 0.25,
+    // 5. Prize pools
+    const prizePools = {
+      5: draw.prize_pool_tier_5 || 0,
+      4: draw.prize_pool_tier_4 || 0,
+      3: draw.prize_pool_tier_3 || 0,
     };
 
-    const { data: draw, error } = await supabaseAdmin
-      .from('draws')
-      .insert([{
-        month,
-        numbers,
-        logic,
-        status: 'simulated',
-        prize_pool_tier_5: pools.tier5,
-        prize_pool_tier_4: pools.tier4,
-        prize_pool_tier_3: pools.tier3,
-      }])
-      .select()
-      .single();
+    // 6. Insert winners
+    const winnersToInsert = [];
+    for (const tier of [5, 4, 3]) {
+      const winnerIds = matchedWinners[tier] || [];
+      const poolAmount = prizePools[tier] || 0;
 
-    if (error) throw error;
+      if (winnerIds.length > 0 && poolAmount > 0) {
+        const prizePerWinner = poolAmount / winnerIds.length;
+        for (const userId of winnerIds) {
+          winnersToInsert.push({
+            draw_id: drawId,
+            user_id: userId,
+            tier: tier,
+            prize_amount: parseFloat(prizePerWinner.toFixed(2)),
+            verification_status: 'pending',
+          });
+        }
+      }
+    }
+
+    if (winnersToInsert.length > 0) {
+      const { error: insertError } = await supabaseAdmin
+        .from('winners')
+        .insert(winnersToInsert);
+      if (insertError) throw insertError;
+    }
 
     res.json({
       success: true,
-      draw,
+      message: `Inserted ${winnersToInsert.length} winners.`,
       winners: matchedWinners,
-      prizePools: pools,
     });
   } catch (error) {
-    console.error('Simulate draw error:', error);
-    res.status(500).json({ error: error.message });
-  }
-};
-
-exports.publishDraw = async (req, res) => {
-  try {
-    const { drawId } = req.params;
-
-    const { data: draw, error: fetchError } = await supabaseAdmin
-      .from('draws')
-      .select('*')
-      .eq('id', drawId)
-      .single();
-
-    if (fetchError) throw fetchError;
-
-    if (draw.status === 'published') {
-      return res.status(400).json({ error: 'Draw already published' });
-    }
-
-    const { error } = await supabaseAdmin
-      .from('draws')
-      .update({ status: 'published' })
-      .eq('id', drawId);
-
-    if (error) throw error;
-
-    res.json({ success: true, message: 'Draw published successfully' });
-  } catch (error) {
-    console.error('Publish draw error:', error);
-    res.status(500).json({ error: error.message });
-  }
-};
-
-// ============================================
-// WINNER MANAGEMENT
-// ============================================
-
-
-exports.updateWinnerStatus = async (req, res) => {
-  try {
-    const { winnerId } = req.params;
-    const { verificationStatus } = req.body;
-
-    const { data, error } = await supabaseAdmin
-      .from('winners')
-      .update({ verification_status: verificationStatus })
-      .eq('id', winnerId)
-      .select()
-      .single();
-
-    if (error) throw error;
-    res.json({ success: true, data });
-  } catch (error) {
-    console.error('Update winner status error:', error);
-    res.status(500).json({ error: error.message });
-  }
-};
-
-exports.markAsPaid = async (req, res) => {
-  try {
-    const { winnerId } = req.params;
-
-    const { data: winner, error: fetchError } = await supabaseAdmin
-      .from('winners')
-      .select('*')
-      .eq('id', winnerId)
-      .single();
-
-    if (fetchError) throw fetchError;
-
-    const { data, error } = await supabaseAdmin
-      .from('winners')
-      .update({ verification_status: 'paid' })
-      .eq('id', winnerId)
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    res.json({ success: true, data });
-  } catch (error) {
-    console.error('Mark as paid error:', error);
+    console.error('forceMatchWinners error:', error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -398,39 +273,86 @@ exports.deleteCharity = async (req, res) => {
   }
 };
 
-// ---------- ACTIVATE USER SUBSCRIPTION ----------
-// ---------- ACTIVATE USER SUBSCRIPTION ----------
-exports.activateUser = async (req, res) => {
+// ============================================
+// DRAW MANAGEMENT (Admin)
+// ============================================
+exports.getAllDraws = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { data, error } = await supabaseAdmin
+      .from('draws')
+      .select('*')
+      .order('created_at', { ascending: false })   // ✅ Latest first
+      .limit(5);
 
-    // Validate UUID format (optional)
-    if (!id || id.length < 36) {
-      return res.status(400).json({ error: 'Invalid user ID' });
-    }
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Get all draws error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// ============================================
+// WINNER MANAGEMENT (Admin)
+// ============================================
+exports.getAllWinners = async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('winners')
+      .select(`*, profile:user_id (full_name)`)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Get all winners error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.updateWinnerStatus = async (req, res) => {
+  try {
+    const { winnerId } = req.params;
+    const { verificationStatus } = req.body;
 
     const { data, error } = await supabaseAdmin
-      .from('profiles')
-      .update({
-        subscription_status: 'active',
-        // Optionally set payment_status to 'active' or keep 'received'
-      })
-      .eq('id', id)
+      .from('winners')
+      .update({ verification_status: verificationStatus })
+      .eq('id', winnerId)
       .select()
       .single();
 
-    if (error) {
-      console.error('Supabase error:', error);
-      return res.status(500).json({ error: error.message });
-    }
-
-    if (!data) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    res.json({ success: true, data, message: 'User activated successfully' });
+    if (error) throw error;
+    res.json({ success: true, data });
   } catch (error) {
-    console.error('Activate user error:', error);
+    console.error('Update winner status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.markAsPaid = async (req, res) => {
+  try {
+    const { winnerId } = req.params;
+
+    const { data: winner, error: fetchError } = await supabaseAdmin
+      .from('winners')
+      .select('*')
+      .eq('id', winnerId)
+      .single();
+
+    if (fetchError) throw fetchError;
+
+    const { data, error } = await supabaseAdmin
+      .from('winners')
+      .update({ verification_status: 'paid' })
+      .eq('id', winnerId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Mark as paid error:', error);
     res.status(500).json({ error: error.message });
   }
 };

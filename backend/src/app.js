@@ -53,11 +53,6 @@ app.get('/api/health', (req, res) => {
 });
 
 
-app.use(express.static(path.join(_dirname, "frontend", "dist")))
-
-app.get("/{*splat}", (req, res) => {
-  res.sendFile(path.resolve(_dirname, "frontend", "dist", "index.html"))
-})
 
 // 404 handler
 app.use((req, res) => {
