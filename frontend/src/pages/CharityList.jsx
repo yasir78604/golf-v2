@@ -91,21 +91,18 @@ const CharityList = () => {
                     </div>
                   )}
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-semibold text-white truncate">
-                        {charity.name}
-                      </h3>
-                      {charity.is_featured && (
-                        <Star className="w-4 h-4 text-gold fill-gold flex-shrink-0" />
-                      )}
-                    </div>
+                    <h3 className="font-semibold text-white truncate">{charity.name}</h3>
+                    {charity.is_featured && (
+                      <span className="text-xs text-gold flex items-center gap-1">
+                        <Star className="w-3 h-3 fill-gold" />
+                        Featured
+                      </span>
+                    )}
                   </div>
                 </div>
 
                 {charity.description && (
-                  <p className="text-sm text-gray-400 mt-3 flex-1 line-clamp-3">
-                    {charity.description}
-                  </p>
+                  <p className="text-sm text-gray-400 mt-3 line-clamp-3">{charity.description}</p>
                 )}
 
                 <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-700/50">
@@ -123,9 +120,6 @@ const CharityList = () => {
                   ) : (
                     <span className="text-sm text-gray-500">No website</span>
                   )}
-                  <span className="text-xs text-gray-500">
-                    ID: {charity.id.slice(0, 8)}
-                  </span>
                 </div>
               </div>
             </Card>

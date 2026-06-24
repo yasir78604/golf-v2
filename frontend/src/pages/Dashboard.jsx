@@ -23,7 +23,7 @@ import toast from 'react-hot-toast';
 const Dashboard = () => {
   const { user, refreshUser } = useAuth();
 
-  // ALL HOOKS AT THE TOP
+  // ---------- State ----------
   const [scores, setScores] = useState([]);
   const [winnings, setWinnings] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -31,7 +31,14 @@ const Dashboard = () => {
   const [newScore, setNewScore] = useState({ date: '', points: '' });
   const [editingScore, setEditingScore] = useState(null);
 
-  // Fetch data
+  // ---------- 🔥 Charity Fix: If charity_id exists but charity object is missing, force refresh ----------
+  useEffect(() => {
+    if (user?.charity_id && !user?.charity) {
+      refreshUser();
+    }
+  }, [user, refreshUser]);
+
+  // ---------- Fetch data ----------
   const fetchData = async () => {
     try {
       setLoading(true);
@@ -49,12 +56,12 @@ const Dashboard = () => {
     }
   };
 
-  // Initial fetch
+  // ---------- Initial fetch ----------
   useEffect(() => {
     fetchData();
   }, []);
 
-  // Real-time subscription for profile updates (activation)
+  // ---------- Real-time: profile updates (activation) ----------
   useEffect(() => {
     if (!user) return;
 
@@ -80,7 +87,7 @@ const Dashboard = () => {
     };
   }, [user, refreshUser]);
 
-  // 🔥 Real-time subscription for new winners
+  // ---------- Real-time: new winnings ----------
   useEffect(() => {
     if (!user) return;
 
@@ -107,7 +114,7 @@ const Dashboard = () => {
     };
   }, [user]);
 
-  // Score CRUD
+  // ---------- Score CRUD ----------
   const handleAddScore = async (e) => {
     e.preventDefault();
     try {
@@ -132,7 +139,8 @@ const Dashboard = () => {
     }
   };
 
-  // Conditional rendering
+  // ---------- Conditional rendering ----------
+  // Awaiting admin activation
   if (user?.subscription_status === 'pending' && user?.payment_status === 'received') {
     return (
       <div className="max-w-3xl mx-auto py-12 text-center">
@@ -152,6 +160,7 @@ const Dashboard = () => {
     );
   }
 
+  // Not subscribed (or subscription inactive)
   if (user?.subscription_status !== 'active' && user?.role !== 'admin') {
     return (
       <div className="max-w-3xl mx-auto py-12 text-center">
@@ -171,6 +180,7 @@ const Dashboard = () => {
     );
   }
 
+  // Loading state
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -179,6 +189,7 @@ const Dashboard = () => {
     );
   }
 
+  // ---------- Helpers for status badges ----------
   const getStatusBadge = (status) => {
     const configs = {
       pending: { icon: <Clock className="w-4 h-4" />, color: 'text-yellow-400', bg: 'bg-yellow-400/10' },
@@ -189,6 +200,7 @@ const Dashboard = () => {
     return configs[status] || configs.pending;
   };
 
+  // ---------- Main Dashboard ----------
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       {/* Welcome */}

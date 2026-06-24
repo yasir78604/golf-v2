@@ -1,15 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useAuth } from '../../context/AuthContext';
-import api from '../../services/api';
 import AdminSidebar from '../../components/admin/AdminSidebar';
-import Button from '../../components/common/Button';
 import Card from '../../components/common/Card';
+import Button from '../../components/common/Button';
+import api from '../../services/api';
 import {
   Gift,
   TrendingUp,
-  Users,
-  DollarSign,
   Calendar,
   Play,
   CheckCircle,
@@ -26,6 +24,7 @@ const DrawManagement = () => {
   const [loading, setLoading] = useState(true);
   const [simulating, setSimulating] = useState(false);
   const [simulationResult, setSimulationResult] = useState(null);
+  const [manualDrawId, setManualDrawId] = useState(''); // ✅ For manual force winners
   const [formData, setFormData] = useState({
     month: new Date().toISOString().slice(0, 7),
     logic: 'random',
@@ -43,8 +42,7 @@ const DrawManagement = () => {
         api.get('/draws/current'),
       ]);
       setDraws(allRes.data.data || []);
-      // currentRes.data.data may be null
-      setCurrentDraw(currentRes.data.data || null);
+      setCurrentDraw(currentRes.data.data);
     } catch (error) {
       console.error('Failed to fetch draws:', error);
       toast.error('Failed to load draws');
@@ -79,7 +77,21 @@ const DrawManagement = () => {
     }
   };
 
-  
+  const handleForceWinners = async (drawId) => {
+    if (!drawId) {
+      toast.error('Please enter a valid Draw ID');
+      return;
+    }
+    if (!window.confirm('Manually match winners for this draw?')) return;
+    try {
+      await api.post(`/admin/draws/${drawId}/force-winners`);
+      toast.success('Winners forced successfully!');
+      setManualDrawId('');
+      fetchDraws();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed to force winners');
+    }
+  };
 
   const getStatusBadge = (status) => {
     const configs = {
@@ -133,10 +145,7 @@ const DrawManagement = () => {
                 </div>
               </div>
               {currentDraw.status === 'simulated' && (
-                <Button
-                  variant="primary"
-                  onClick={() => handlePublish(currentDraw.id)}
-                >
+                <Button variant="primary" onClick={() => handlePublish(currentDraw.id)}>
                   <CheckCircle className="w-4 h-4" />
                   Publish Draw
                 </Button>
@@ -256,7 +265,7 @@ const DrawManagement = () => {
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-xl font-semibold text-white flex items-center gap-2">
               <Calendar className="w-5 h-5 text-impact" />
-              Past Draws
+              Past Draws (Last 5)
             </h3>
             <Button variant="ghost" size="sm" onClick={fetchDraws}>
               <RefreshCw className="w-4 h-4" />
@@ -285,7 +294,7 @@ const DrawManagement = () => {
                   {draws.map((draw) => {
                     const status = getStatusBadge(draw.status);
                     return (
-                      <tr key={draw.id} className="border-b border-gray-700/50 last:border-0">
+                      <tr key={draw.id} className="border-b border-gray-700/50 last:border-0 hover:bg-white/5 transition-colors">
                         <td className="py-3 text-white font-medium">{draw.month}</td>
                         <td className="py-3 text-gold">{draw.numbers?.join(' - ')}</td>
                         <td className="py-3 text-gray-400 text-sm">{draw.logic?.replace('_', ' ')}</td>
@@ -295,18 +304,22 @@ const DrawManagement = () => {
                             {status.label}
                           </span>
                         </td>
-                        <td className="py-3">
+                        <td className="py-3 flex gap-2">
                           {draw.status === 'simulated' && (
-                            <Button
-                              variant="success"
-                              size="sm"
+                            <button
                               onClick={() => handlePublish(draw.id)}
+                              className="bg-green-500 hover:bg-green-600 text-white text-xs px-3 py-1 rounded-lg transition-colors"
                             >
                               Publish
-                            </Button>
+                            </button>
                           )}
                           {draw.status === 'published' && (
-                            <span className="text-xs text-gray-500">Published</span>
+                            <button
+                              onClick={() => handleForceWinners(draw.id)}
+                              className="bg-red-500 hover:bg-red-600 text-white text-xs px-3 py-1 rounded-lg transition-colors"
+                            >
+                              Force Winners
+                            </button>
                           )}
                         </td>
                       </tr>
@@ -317,6 +330,34 @@ const DrawManagement = () => {
             </div>
           )}
         </Card>
+
+        {/* ✅ Manual Force Winners Section */}
+        <Card className="border border-red-500/20">
+          <h4 className="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
+            <span className="text-red-400 text-lg">⚠️</span>
+            Manual Force Winners (Fallback)
+          </h4>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <input
+              type="text"
+              placeholder="Paste Draw ID here"
+              value={manualDrawId}
+              onChange={(e) => setManualDrawId(e.target.value)}
+              className="flex-1 bg-dark text-white px-4 py-2 rounded-xl border border-gray-700 focus:border-impact focus:outline-none text-sm"
+            />
+            <Button
+              variant="danger"
+              onClick={() => handleForceWinners(manualDrawId)}
+              disabled={!manualDrawId}
+            >
+              Force Winners
+            </Button>
+          </div>
+          <p className="text-xs text-gray-500 mt-2">
+            Use this if the draw is not showing in the list, or if you need to re-run winner matching manually.
+          </p>
+        </Card>
+
       </div>
     </div>
   );

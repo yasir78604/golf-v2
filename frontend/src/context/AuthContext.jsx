@@ -46,8 +46,11 @@ export const AuthProvider = ({ children }) => {
       const response = await api.post('/auth/signup', userData);
       return { success: true, data: response.data };
     } catch (error) {
-      const messages = error.response?.data?.errors?.map(e => e.message).join(', ');
-      return { success: false, error: messages || error.response?.data?.error || 'Signup failed' };
+      if (error.response?.data?.errors) {
+        const messages = error.response.data.errors.map(e => e.message).join(', ');
+        return { success: false, error: messages };
+      }
+      return { success: false, error: error.response?.data?.error || 'Signup failed' };
     }
   };
 
@@ -65,7 +68,6 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // ✅ IMPORTANT: refreshUser must be defined and exported
   const refreshUser = async () => {
     try {
       const response = await api.get('/auth/me');
